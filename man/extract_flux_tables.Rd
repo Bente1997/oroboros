@@ -6,7 +6,7 @@
 \usage{
 extract_flux_tables(
   project,
-  include_excluded = FALSE,
+  include_non_experimental = FALSE,
   format = c("long", "wide"),
   verbose = FALSE,
   pkg = "oroboros",
@@ -17,7 +17,7 @@ extract_flux_tables(
 \arguments{
 \item{project}{A \code{dld8_project} object.}
 
-\item{include_excluded}{Logical; include excluded files.}
+\item{include_non_experimental}{Logical; include non-experimental files.}
 
 \item{format}{\code{"long"} or \code{"wide"}.}
 

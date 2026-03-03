@@ -4,12 +4,12 @@
 \alias{create_dld8_project}
 \title{Create a DLD8 Project (In Memory)}
 \usage{
-create_dld8_project(source_folder, exclude_protocols = FALSE)
+create_dld8_project(source_folder, exclude_non_experimental = TRUE)
 }
 \arguments{
 \item{source_folder}{Folder containing \code{.dld8} files.}
 
-\item{exclude_protocols}{Logical; filter out excluded protocols.}
+\item{exclude_non_experimental}{Logical; filter out non-experimental protocols.}
 }
 \value{
 A \code{dld8_project} object.

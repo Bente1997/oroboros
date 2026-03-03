@@ -4,12 +4,12 @@
 \alias{extract_metadata_df}
 \title{Extract Metadata Data Frame}
 \usage{
-extract_metadata_df(project, include_excluded = FALSE)
+extract_metadata_df(project, include_non_experimental = FALSE)
 }
 \arguments{
 \item{project}{A \code{dld8_project} object.}
 
-\item{include_excluded}{Logical; include excluded files.}
+\item{include_non_experimental}{Logical; include non-experimental files.}
 }
 \value{
 Data frame of metadata (one row per file/chamber).

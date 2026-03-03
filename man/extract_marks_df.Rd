@@ -4,12 +4,12 @@
 \alias{extract_marks_df}
 \title{Extract Marks Data Frame}
 \usage{
-extract_marks_df(project, include_excluded = FALSE)
+extract_marks_df(project, include_non_experimental = FALSE)
 }
 \arguments{
 \item{project}{A \code{dld8_project} object.}
 
-\item{include_excluded}{Logical; include excluded files.}
+\item{include_non_experimental}{Logical; include non-experimental files.}
 }
 \value{
 Data frame of marks (one row per mark).

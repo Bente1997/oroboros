@@ -4,12 +4,12 @@
 \alias{debug_print_present_marks}
 \title{Debug: Print Present Marks Per File/Chamber}
 \usage{
-debug_print_present_marks(project, include_excluded = FALSE)
+debug_print_present_marks(project, include_non_experimental = FALSE)
 }
 \arguments{
 \item{project}{A \code{dld8_project} object.}
 
-\item{include_excluded}{Logical; include excluded files.}
+\item{include_non_experimental}{Logical; include non-experimental files.}
 }
 \description{
 Prints the mark names found in each file and chamber.

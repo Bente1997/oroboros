@@ -8,7 +8,7 @@ new_dld8_project(
   source_folder,
   rel_files,
   excluded_files,
-  exclude_protocols,
+  exclude_non_experimental,
   parse_errors = list()
 )
 }
@@ -19,7 +19,7 @@ new_dld8_project(
 
 \item{excluded_files}{Relative paths excluded in the project.}
 
-\item{exclude_protocols}{Logical; whether excluded protocols were filtered.}
+\item{exclude_non_experimental}{Logical; whether non-experimental protocols were filtered.}
 
 \item{parse_errors}{Optional list of parse errors.}
 }

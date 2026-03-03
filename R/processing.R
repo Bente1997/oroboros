@@ -890,16 +890,7 @@ validate_effective_markers <- function(project, include_non_experimental = FALSE
   do.call(rbind, out_rows)
 }
 
-# Backward-compatible wrapper (deprecated)
-#' @keywords internal
-validate_marker_overrides <- function(project, strict = FALSE, include_non_experimental = FALSE,
-                                      require = c("baseline", "reference")) {
-  df <- validate_effective_markers(project, include_non_experimental = include_non_experimental, require = require)
-  if (isTRUE(strict) && any(df$baseline_ok == FALSE | df$reference_ok == FALSE, na.rm = TRUE)) {
-    stop("Found invalid baseline/reference markers.")
-  }
-  df
-}
+
 
 #' Load Protocol Library
 #'
