@@ -33,8 +33,9 @@ print(project$excluded_dld8_files) # Nr. of dld8 files excluded (cleaning/backgr
 ```
 
 ### Marks and file information
--  `extract_marks_df` results in a long-format dataframe with information on each mark. E.g. `markName`, `RespiratoryState`, `calibrationVolume`.
--  `metadata_df` results in a wide format dataframe with each row an entity (`file` x `chamber`) with its metadata. E.g. `sampleCode`, `sampleNumber`, etc.
+
+- `extract_marks_df` results in a long-format dataframe with information on each mark. E.g. `markName`, `RespiratoryState`, `calibrationVolume`.
+- `metadata_df` results in a wide format dataframe with each row an entity (`file` x `chamber`) with its metadata. E.g. `sampleCode`, `sampleNumber`, etc.
 
 ```r
 marks_df <- extract_marks_df(project)
@@ -123,10 +124,11 @@ tables_by_protocol <- extract_flux_tables(project, format = "wide", group_by_pro
 
 
 ### Check for file changes
-`check_project_changes` Checks whether the folder used to initiate the project has any changes.
-`changes$changed`: Existing files in the project that have been altered.
-`changes$added`: New files in the source folder.
-`changes$removed`: Files that are now missing from the source folder.
+
+- `check_project_changes` Checks whether the folder used to initiate the project has any changes.
+- `changes$changed`: Existing files in the project that have been altered.
+- `changes$added`: New files in the source folder.
+- `changes$removed`: Files that are now missing from the source folder.
 
 ```r
 changes <- check_project_changes(project)
