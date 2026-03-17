@@ -30,6 +30,10 @@ project <- create_dld8_project(
 
 print(project$dld8_files) # Nr. of experimental dld8 files found in your directory
 print(project$excluded_dld8_files) # Nr. of dld8 files excluded (cleaning/background files)
+
+# the returned object already holds a cache of parsed data in
+# `project$parsed_dld8`; subsequent helpers reuse that cache instead
+# of reading every file again.
 ```
 
 ### Marks and file information

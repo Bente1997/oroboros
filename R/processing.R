@@ -116,14 +116,13 @@ debug_print_present_marks <- function(project, include_non_experimental = FALSE)
     rel_files <- c(rel_files, project$excluded_dld8_files)
   }
   for (rel in rel_files) {
-    abs_path <- file.path(project$source_folder, rel)
-    dld8_json <- tryCatch(read_dld8_json(abs_path), error = function(e) NULL)
+    dld8_json <- get_dld8(project, rel)
     if (is.null(dld8_json)) {
       message("[skip] parse failed: ", rel)
       next
     }
     for (ch in c("chamber_a", "chamber_b")) {
-      marks <- get_marks_from_chamber(ch, dld8_json)
+      marks <- get_marks_from_chamber(ch, dld8_json, verbose = FALSE)
       names_vec <- character()
       if (length(marks) > 0) {
         names_vec <- vapply(marks, function(mk) mk$markName %||% NA_character_, character(1))
@@ -204,6 +203,55 @@ build_file_cache <- function(source_folder, rel_files) {
     return(data.frame(rel_path = character(), mtime = numeric(), size = numeric(), stringsAsFactors = FALSE))
   }
   do.call(rbind, rows)
+}
+
+#' Retrieve parsed JSON for a project file, caching in the project
+#'
+#' The project stores an environment in `project$parsed_dld8` so that
+#' subsequent calls reuse the same object rather than reparsing from disk.
+#' The environment is created by `new_dld8_project()` and populated by
+#' `create_dld8_project()`; any function that needs the contents of a
+#' `.dld8` file should call `get_dld8(project, rel)` instead of
+#' `read_dld8_json()` directly.
+#'
+get_dld8 <- function(project, rel) {
+  env <- project$parsed_dld8
+  abs_path <- file.path(project$source_folder, rel)
+
+  # If we already parsed this file, check whether it is stale compared to file_cache.
+  if (is.environment(env) && exists(rel, envir = env, inherits = FALSE)) {
+    cached_json <- env[[rel]]
+    stale <- FALSE
+
+    if (!is.null(project$file_cache) && nrow(project$file_cache) > 0) {
+      idx <- which(project$file_cache$rel_path == rel)
+      if (length(idx) == 1) {
+        info <- tryCatch(file.info(abs_path), error = function(e) NULL)
+        if (!is.null(info) && !is.na(info$size)) {
+          stale <- !(isTRUE(all.equal(as.numeric(info$mtime), project$file_cache$mtime[idx])) &&
+                     isTRUE(all.equal(as.numeric(info$size), project$file_cache$size[idx])))
+        } else {
+          stale <- TRUE
+        }
+      } else {
+        stale <- TRUE
+      }
+    }
+
+    if (!stale) {
+      return(cached_json)
+    }
+  }
+
+  dld8_json <- tryCatch(read_dld8_json(abs_path), error = function(e) NULL)
+  if (is.environment(env)) {
+    env[[rel]] <- dld8_json
+  } else {
+    # fall back to list if older project structure
+    project$parsed_dld8 <- list()
+    project$parsed_dld8[[rel]] <- dld8_json
+  }
+  dld8_json
 }
 
 get_latest_run_data <- function(dld8_json) {
@@ -364,9 +412,10 @@ get_sample_metadata_from_json <- function(chamber_id, dld8_json) {
 #'
 #' @param chamber_id Character: `"chamber_a"` or `"chamber_b"`.
 #' @param dld8_json Parsed DLD8 list (from `read_dld8_json()`).
+#' @param verbose Logical; if `TRUE` print diagnostic messages while parsing.
 #' @return List of marks.
 #' @keywords internal
-get_marks_from_chamber <- function(chamber_id, dld8_json) {
+get_marks_from_chamber <- function(chamber_id, dld8_json, verbose = FALSE) {
   run_data <- get_latest_run_data(dld8_json)
   if (length(run_data) == 0) return(list())
 
@@ -376,6 +425,9 @@ get_marks_from_chamber <- function(chamber_id, dld8_json) {
 
   marks <- list()
   for (value in marks_root) {
+    if (isTRUE(verbose)) {
+      message("[debug] processing raw mark entry", paste(capture.output(str(value)), collapse = " "))
+    }
     if (!is.list(value) || is.null(value$markName)) next
     mark <- list(
       markName = safe_get(value, c("markName", "value")),
@@ -394,6 +446,10 @@ get_marks_from_chamber <- function(chamber_id, dld8_json) {
       values = list()
     )
     mark_values <- safe_get(value, c("markValue"), default = list())
+    if (isTRUE(verbose) && (!is.list(mark_values) || length(mark_values) == 0)) {
+      message("[debug]   no markValue list for mark", mk$markName, "; value structure:",
+              paste(capture.output(str(value)), collapse = " "))
+    }
     if (is.list(mark_values) && length(mark_values) > 0) {
       for (mv in mark_values) {
         mark$values <- c(mark$values, list(list(
@@ -436,7 +492,11 @@ scan_dld8_files <- function(source_folder) {
 #' @return An object of class `dld8_project`.
 #' @keywords internal
 new_dld8_project <- function(source_folder, rel_files, excluded_files, exclude_non_experimental,
-                             parse_errors = list()) {
+                             parse_errors = list(), parsed_dld8 = new.env(parent = emptyenv())) {
+  # `parsed_dld8` is a named list (or environment) containing the result of
+  # `read_dld8_json()` for each file included in the project.  it is used
+  # by the various `extract_*`/`validate_*` helpers so they don't re‑read
+  # every file on every call.
   file_cache <- build_file_cache(source_folder, c(rel_files, excluded_files))
   structure(
     list(
@@ -445,6 +505,7 @@ new_dld8_project <- function(source_folder, rel_files, excluded_files, exclude_n
       excluded_dld8_files = excluded_files,
       parse_errors = parse_errors,
       file_cache = file_cache,
+      parsed_dld8 = parsed_dld8,
       marker_overrides = data.frame(
         rel_path = character(),
         chamber = character(),
@@ -473,9 +534,10 @@ new_dld8_project <- function(source_folder, rel_files, excluded_files, exclude_n
 #'
 #' @param source_folder Folder containing `.dld8` files.
 #' @param exclude_non_experimental Logical; filter out non-experimental protocols.
+#' @param verbose Logical; if `TRUE` show parsing diagnostics from `get_marks_from_chamber`.
 #' @return A `dld8_project` object.
 #' @export
-create_dld8_project <- function(source_folder, exclude_non_experimental = TRUE) {
+create_dld8_project <- function(source_folder, exclude_non_experimental = TRUE, verbose = FALSE) {
   source_folder <- normalizePath(source_folder, winslash = "/", mustWork = FALSE)
 
   rel_files <- scan_dld8_files(source_folder)
@@ -508,6 +570,10 @@ create_dld8_project <- function(source_folder, exclude_non_experimental = TRUE) 
     )
   }
 
+  # convert parsed list to environment for mutable caching
+  parsed_env <- new.env(parent = emptyenv())
+  for (rel in names(dld8_cache)) parsed_env[[rel]] <- dld8_cache[[rel]]
+
   filtered_files <- character()
   excluded_by_protocol <- character()
   if (exclude_non_experimental) {
@@ -517,7 +583,13 @@ create_dld8_project <- function(source_folder, exclude_non_experimental = TRUE) 
         chambers$chamber_a$protocol %||% "",
         chambers$chamber_b$protocol %||% ""
       )
-      if (all(!protocols %in% EXCLUDED_PROTOCOLS)) {
+      # exclude anything explicitly listed or any protocol name that
+      # contains "calibration" (case insensitive).  this mirrors the
+      # behavior of the original app and ensures we don't accidentally
+      # treat calibration runs as experimental.
+      bad_proto <- protocols %in% EXCLUDED_PROTOCOLS |
+                   grepl("calibration", protocols, ignore.case = TRUE)
+      if (all(!bad_proto)) {
         filtered_files <- c(filtered_files, rel)
       } else {
         excluded_by_protocol <- c(excluded_by_protocol, rel)
@@ -536,8 +608,8 @@ create_dld8_project <- function(source_folder, exclude_non_experimental = TRUE) 
       next
     }
     run_data <- get_latest_run_data(dld8_json)
-    chamber_a <- if (!is.null(run_data$chamber1)) get_marks_from_chamber("chamber_a", dld8_json) else list()
-    chamber_b <- if (!is.null(run_data$chamber2)) get_marks_from_chamber("chamber_b", dld8_json) else list()
+    chamber_a <- if (!is.null(run_data$chamber1)) get_marks_from_chamber("chamber_a", dld8_json, verbose = verbose) else list()
+    chamber_b <- if (!is.null(run_data$chamber2)) get_marks_from_chamber("chamber_b", dld8_json, verbose = verbose) else list()
     if (length(chamber_a) > 0 || length(chamber_b) > 0) {
       stats[[rel]] <- list(chamber_a = chamber_a, chamber_b = chamber_b)
     } else {
@@ -548,7 +620,9 @@ create_dld8_project <- function(source_folder, exclude_non_experimental = TRUE) 
   included <- if (length(stats) == 0) character() else names(stats)
   excluded <- c(excluded_by_protocol, excluded_by_marks, parse_failures)
 
-  new_dld8_project(source_folder, included, excluded, exclude_non_experimental, parse_errors = parse_errors)
+  new_dld8_project(source_folder, included, excluded, exclude_non_experimental,
+                   parse_errors = parse_errors,
+                   parsed_dld8 = parsed_env)
 }
 
 #' Extract Metadata Data Frame
@@ -567,8 +641,7 @@ extract_metadata_df <- function(project, include_non_experimental = FALSE) {
 
   rows <- list()
   for (rel in rel_files) {
-    abs_path <- file.path(source_folder, rel)
-    dld8_json <- tryCatch(read_dld8_json(abs_path), error = function(e) NULL)
+    dld8_json <- get_dld8(project, rel)
     if (is.null(dld8_json)) next
     for (ch in c("chamber_a", "chamber_b")) {
       md <- get_sample_metadata_from_json(ch, dld8_json)
@@ -612,11 +685,10 @@ extract_marks_df <- function(project, include_non_experimental = FALSE) {
 
   rows <- list()
   for (rel in rel_files) {
-    abs_path <- file.path(source_folder, rel)
-    dld8_json <- tryCatch(read_dld8_json(abs_path), error = function(e) NULL)
+    dld8_json <- get_dld8(project, rel)
     if (is.null(dld8_json)) next
     for (ch in c("chamber_a", "chamber_b")) {
-      marks <- get_marks_from_chamber(ch, dld8_json)
+      marks <- get_marks_from_chamber(ch, dld8_json, verbose = FALSE)
       if (length(marks) == 0) next
       for (mk in marks) {
         row <- data.frame(
@@ -702,6 +774,83 @@ check_project_changes <- function(project, include_non_experimental = TRUE,
 
   if (isTRUE(update)) {
     project$file_cache <- current
+
+    # Ensure parsed_dld8 is an environment for inplace updates.
+    if (!is.environment(project$parsed_dld8)) {
+      env_new <- new.env(parent = emptyenv())
+      if (!is.null(project$parsed_dld8) && length(project$parsed_dld8) > 0) {
+        for (nm in names(project$parsed_dld8)) {
+          env_new[[nm]] <- project$parsed_dld8[[nm]]
+        }
+      }
+      project$parsed_dld8 <- env_new
+    }
+    env <- project$parsed_dld8
+
+    exclude_non_experimental <- project$settings$exclude_non_experimental %||% TRUE
+
+    classify_file <- function(rel, dld8_json) {
+      if (is.null(dld8_json) || !is.list(dld8_json)) {
+        return("parse_failure")
+      }
+      chambers <- list(
+        chamber_a = get_sample_metadata_from_json("chamber_a", dld8_json),
+        chamber_b = get_sample_metadata_from_json("chamber_b", dld8_json)
+      )
+      if (length(chambers$chamber_a) == 0 && length(chambers$chamber_b) == 0) {
+        return("excluded_by_marks")
+      }
+      include_file <- TRUE
+      if (isTRUE(exclude_non_experimental)) {
+        protocols <- c(chambers$chamber_a$protocol %||% "", chambers$chamber_b$protocol %||% "")
+        bad_proto <- protocols %in% EXCLUDED_PROTOCOLS | grepl("calibration", protocols, ignore.case = TRUE)
+        if (all(bad_proto)) {
+          include_file <- FALSE
+        }
+      }
+      if (!include_file) {
+        return("excluded_by_protocol")
+      }
+
+      has_marks <- FALSE
+      for (ch in c("chamber_a", "chamber_b")) {
+        marks <- get_marks_from_chamber(ch, dld8_json, verbose = FALSE)
+        if (length(marks) > 0) {
+          has_marks <- TRUE
+          break
+        }
+      }
+      if (!has_marks) {
+        return("excluded_by_marks")
+      }
+      "include"
+    }
+
+    # Remove deleted files from project and cache.
+    for (rel in removed) {
+      if (exists(rel, envir = env, inherits = FALSE)) {
+        rm(list = rel, envir = env)
+      }
+      project$dld8_files <- setdiff(project$dld8_files, rel)
+      project$excluded_dld8_files <- setdiff(project$excluded_dld8_files, rel)
+    }
+
+    # Update changed and added files.
+    for (rel in c(changed, added)) {
+      abs_path <- file.path(project$source_folder, rel)
+      dld8_json <- tryCatch(read_dld8_json(abs_path), error = function(e) NULL)
+      env[[rel]] <- dld8_json
+
+      status <- classify_file(rel, dld8_json)
+      if (status == "include") {
+        project$dld8_files <- unique(c(setdiff(project$dld8_files, rel), rel))
+        project$excluded_dld8_files <- setdiff(project$excluded_dld8_files, rel)
+      } else {
+        project$excluded_dld8_files <- unique(c(setdiff(project$excluded_dld8_files, rel), rel))
+        project$dld8_files <- setdiff(project$dld8_files, rel)
+      }
+    }
+
     out$project <- project
   }
 
@@ -794,14 +943,9 @@ validate_effective_markers <- function(project, include_non_experimental = FALSE
   lib <- load_protocol_library()
   out_rows <- list()
 
-  # cache parsed files
-  cache <- new.env(parent = emptyenv())
+  # we now keep a shared cache on the project object itself
   get_file <- function(rel) {
-    if (exists(rel, envir = cache, inherits = FALSE)) return(get(rel, envir = cache))
-    abs_path <- file.path(project$source_folder, rel)
-    dld8_json <- tryCatch(read_dld8_json(abs_path), error = function(e) NULL)
-    assign(rel, dld8_json, envir = cache)
-    dld8_json
+    get_dld8(project, rel)
   }
 
   for (rel in rel_files) {
@@ -810,7 +954,7 @@ validate_effective_markers <- function(project, include_non_experimental = FALSE
     for (ch in c("chamber_a", "chamber_b")) {
       md <- get_sample_metadata_from_json(ch, dld8_json)
       if (length(md) == 0) next
-      marks <- get_marks_from_chamber(ch, dld8_json)
+      marks <- get_marks_from_chamber(ch, dld8_json, verbose = FALSE)
       if (length(marks) == 0) next
 
       protocol_raw <- md$protocol %||% ""
@@ -955,7 +1099,16 @@ load_protocol_library <- function(pkg = "oroboros") {
   )
 }
 
-compute_precalc <- function(meta, marks) {
+compute_precalc <- function(meta, marks, verbose = FALSE) {
+  # meta: sample metadata list; marks: list of mark objects for one chamber.
+  # Returns a list containing per-mark flux_per_volume, specific_flux, and
+  # dilution_factor entries.  `specific_flux` is computed as
+  #   fluxPV / (sample_conc * prev_df)
+  # If sample concentration is missing or zero the specific_flux value is left
+  # as NA so that data-quality issues remain visible rather than masked.
+  # where sample_conc is derived from metadata.  If concentration is missing or
+  # zero we drop it from the denominator; this ensures baseline-corrected and
+  # FCR values remain computable even when the metadata is incomplete.
   bg <- meta$backgroundCorrection %||% list()
   a0 <- bg$a0 %||% 0.0
   b0 <- bg$b0 %||% 0.0
@@ -964,6 +1117,9 @@ compute_precalc <- function(meta, marks) {
   amount <- q$amount %||% 0.0
   volume <- q$volume %||% 0.0
   sample_conc <- if (!is.null(volume) && volume != 0) amount / volume else NA_real_
+  if (isTRUE(verbose)) {
+    message(sprintf("[debug] sample quantity amount=%s volume=%s conc=%s", amount, volume, sample_conc))
+  }
 
   chamber_vol <- meta$chamberVolume %||% 2
 
@@ -971,6 +1127,9 @@ compute_precalc <- function(meta, marks) {
   for (mk in marks) {
     slope <- NA_real_
     o2c <- NA_real_
+    if (isTRUE(verbose)) {
+      message(sprintf("[debug] examining mark '%s' with %d values", mk$markName, length(mk$values)))
+    }
     if (is.list(mk$values)) {
       for (v in mk$values) {
         di <- v$datastructureInfo %||% list()
@@ -980,9 +1139,19 @@ compute_precalc <- function(meta, marks) {
           ct_ok <- (ct == 0) || (toupper(as.character(ct)) == "OXYGEN")
           is_slope <- (df == 1) || (toupper(as.character(df)) == "SLOPE")
           is_signal <- (df == 0) || (toupper(as.character(df)) == "SIGNAL")
-          if (ct_ok && is_slope) slope <- v$median %||% NA_real_
-          if (ct_ok && is_signal) o2c <- v$median %||% NA_real_
+          if (ct_ok && is_slope) {
+            slope <- v$median %||% v$average %||% v$value %||% NA_real_
+          }
+          if (ct_ok && is_signal) {
+            o2c <- v$median %||% v$average %||% v$value %||% NA_real_
+          }
         }
+      }
+    }
+    if (isTRUE(verbose)) {
+      if (is.na(slope) || is.na(o2c)) {
+        message(sprintf("[debug] mark '%s' missing slope or o2c (slope=%s, o2c=%s)",
+                        mk$markName, slope, o2c))
       }
     }
     proto <- c(proto, list(list(
@@ -1006,12 +1175,21 @@ compute_precalc <- function(meta, marks) {
     name <- step$name
     slope <- step$slope
     o2c <- step$o2c
+    if (isTRUE(verbose)) {
+      message(sprintf("[debug] compute_precalc step=%s slope=%s o2c=%s", name, slope, o2c))
+    }
 
     if (!is.na(slope) && !is.na(o2c)) {
       flux_pv <- slope - (a0 + b0 * o2c)
       precalc$flux_per_volume[[name]] <- flux_pv
-      if (!is.na(sample_conc) && sample_conc != 0 && !is.na(prev_df) && prev_df != 0) {
-        precalc$specific_flux[[name]] <- flux_pv / (sample_conc * prev_df)
+      if (!is.na(prev_df) && prev_df != 0) {
+        if (is.na(sample_conc) || sample_conc == 0) {
+          if (isTRUE(verbose)) {
+            message(sprintf("[debug] skipping specific_flux for '%s': sample_conc=%s", name, sample_conc))
+          }
+        } else {
+          precalc$specific_flux[[name]] <- flux_pv / (sample_conc * prev_df)
+        }
       }
     }
 
@@ -1041,7 +1219,10 @@ compute_precalc <- function(meta, marks) {
 #' @param group_by_protocol Logical; when TRUE, return a list of tables per protocol.
 #' @param pkg Package name containing the `protocols` dataset.
 #' @return A list of data frames: `flux_per_volume`, `specific_flux`,
-#'   `specific_flux_bc`, `fcr`, `fcr_bc`.
+#'   `specific_flux_bc`, `fcr`, `fcr_bc`.  The baseline-corrected and FCR
+#'   tables always include the same rows as `specific_flux`; when the baseline
+#'   or reference mark is not available (or its value is zero) the corresponding
+#'   entries are filled with `NA` rather than dropping the row entirely.
 #' @export
 extract_flux_tables <- function(project, include_non_experimental = FALSE,
                                 format = c("long", "wide"),
@@ -1076,8 +1257,7 @@ extract_flux_tables <- function(project, include_non_experimental = FALSE,
 
   processed_pairs <- 0
   for (rel in rel_files) {
-    abs_path <- file.path(source_folder, rel)
-    dld8_json <- tryCatch(read_dld8_json(abs_path), error = function(e) NULL)
+    dld8_json <- get_dld8(project, rel)
     if (is.null(dld8_json)) {
       if (isTRUE(verbose)) message("[skip] parse failed: ", rel)
       next
@@ -1096,7 +1276,7 @@ extract_flux_tables <- function(project, include_non_experimental = FALSE,
         next
       }
 
-      precalc <- compute_precalc(md, marks)
+      precalc <- compute_precalc(md, marks, verbose = verbose)
       protocol_raw <- md$protocol %||% NA_character_
       protocol_id <- extract_protocol_id_R(protocol_raw)
       protocol_for_lookup <- if (!is.na(protocol_id)) protocol_id else protocol_raw
@@ -1145,6 +1325,11 @@ extract_flux_tables <- function(project, include_non_experimental = FALSE,
       baseline_mark <- resolve_marker_text_only(baseline_mark, marks)
       reference_mark <- resolve_marker_text_only(reference_mark, marks)
 
+      if (isTRUE(verbose)) {
+        message(sprintf("[debug] %s %s baseline='%s' reference='%s' # marks=%d",
+                        rel, ch, baseline_mark, reference_mark, length(marks)))
+      }
+
       meta_row <- list(
         rel_path = rel,
         filename = basename(rel),
@@ -1185,36 +1370,49 @@ extract_flux_tables <- function(project, include_non_experimental = FALSE,
         rows_flux <- c(rows_flux, list(as.data.frame(c(meta_row, list(mark = mark, value = flux_val)))))
         rows_spec <- c(rows_spec, list(as.data.frame(c(meta_row, list(mark = mark, value = spec_val)))))
 
+        # determine baseline/reference values once per pair
+        base_val <- NA_real_
         if (!is.na(baseline_mark) && !is.null(precalc$specific_flux[[baseline_mark]])) {
           base_val <- precalc$specific_flux[[baseline_mark]]
-          if (!is.na(base_val) && base_val != 0) {
-            rows_spec_bc <- c(rows_spec_bc, list(as.data.frame(c(
-              meta_row, list(mark = mark, value = spec_val - base_val)
-            ))))
-          }
         }
-
+        ref_val <- NA_real_
         if (!is.na(reference_mark) && !is.null(precalc$specific_flux[[reference_mark]])) {
           ref_val <- precalc$specific_flux[[reference_mark]]
-          if (!is.na(ref_val) && ref_val != 0) {
-            rows_fcr <- c(rows_fcr, list(as.data.frame(c(
-              meta_row, list(mark = mark, value = spec_val / ref_val)
-            ))))
-          }
+        }
+        if (isTRUE(verbose)) {
+          message(sprintf("[debug]   mark=%s spec=%s base=%s ref=%s",
+                          mark, spec_val, base_val, ref_val))
         }
 
-        if (!is.na(baseline_mark) && !is.na(reference_mark) &&
-            !is.null(precalc$specific_flux[[baseline_mark]]) &&
-            !is.null(precalc$specific_flux[[reference_mark]])) {
-          base_val <- precalc$specific_flux[[baseline_mark]]
-          ref_val <- precalc$specific_flux[[reference_mark]]
+        # always append rows (value may be NA when baseline/ref missing)
+        spec_bc_val <- NA_real_
+        if (!is.na(spec_val) && !is.na(base_val)) {
+          # note: if base_val is zero, preserve spec_val-base_val = spec_val (no correction);
+          # this keeps behaviour roughly consistent while avoiding empty tables
+          spec_bc_val <- spec_val - base_val
+        }
+        rows_spec_bc <- c(rows_spec_bc, list(as.data.frame(c(
+          meta_row, list(mark = mark, value = spec_bc_val)
+        ))))
+
+        fcr_val <- NA_real_
+        if (!is.na(spec_val) && !is.na(ref_val) && ref_val != 0) {
+          fcr_val <- spec_val / ref_val
+        }
+        rows_fcr <- c(rows_fcr, list(as.data.frame(c(
+          meta_row, list(mark = mark, value = fcr_val)
+        ))))
+
+        fcr_bc_val <- NA_real_
+        if (!is.na(spec_val) && !is.na(base_val) && !is.na(ref_val)) {
           ref_bc <- ref_val - base_val
-          if (!is.na(base_val) && !is.na(ref_bc) && ref_bc != 0) {
-            rows_fcr_bc <- c(rows_fcr_bc, list(as.data.frame(c(
-              meta_row, list(mark = mark, value = (spec_val - base_val) / ref_bc)
-            ))))
+          if (!is.na(ref_bc) && ref_bc != 0) {
+            fcr_bc_val <- (spec_val - base_val) / ref_bc
           }
         }
+        rows_fcr_bc <- c(rows_fcr_bc, list(as.data.frame(c(
+          meta_row, list(mark = mark, value = fcr_bc_val)
+        ))))
       }
     }
   }
