@@ -1,6 +1,6 @@
 # oroboros R Functions (DLD8)
 
-This package replaces the Excel Templates for calculations and allows for bulk analysis of oroboros dld8 files. 
+This package replaces the Excel Templates for calculations and allows for bulk analysis of Oroboros DatLab 8 (.dld8) files. 
 
 What it does:
 - Scan a folder for `.dld8` files
