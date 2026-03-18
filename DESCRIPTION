@@ -1,11 +1,14 @@
 Package: oroboros
-Title: What the Package Does (One Line, Title Case)
+Title: High-Resolution Respirometry Data Processing and Analysis
 Version: 0.0.0.9000
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
-License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
-    license
+    person("Bente", "Theeuwes", , "bente.theeuwes@oroboros.at", role = c("aut", "cre"))
+Description: Streamlines the workflow for high-resolution respirometry by 
+    providing tools to import DatLab 8 files in bulk. The package automates 
+    the extraction of flux data by set marks. It performs standardized 
+    calculations, such as flux per volume, specific flux, flux control ratio,
+    and baseline correction. 
+License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
