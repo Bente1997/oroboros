@@ -31,9 +31,6 @@ project <- create_dld8_project(
 print(project$dld8_files) # Nr. of experimental dld8 files found in your directory
 print(project$excluded_dld8_files) # Nr. of dld8 files excluded (cleaning/background files)
 
-# the returned object already holds a cache of parsed data in
-# `project$parsed_dld8`; subsequent helpers reuse that cache instead
-# of reading every file again.
 ```
 
 ### Marks and file information
@@ -58,6 +55,7 @@ In order for your exports to have baseline correction, you will need to define t
 validation <- validate_effective_markers(project)
 validation[validation$baseline_ok == FALSE | validation$reference_ok == FALSE, ] 
 ```
+
 
 If the marks are not set or you wish to change them, you can do so by defining them per **file/chamber** OR per protocol. 
 
@@ -125,6 +123,15 @@ tables_fallback <- extract_flux_tables(project, format = "wide", mark_order_sour
 tables_by_protocol <- extract_flux_tables(project, format = "wide", group_by_protocol = TRUE)
 ```
 
+### Event intervals and raw time series
+
+```r
+# Event intervals ---------------------------------------------------------
+events_df <- extract_events(project)
+
+# Raw data ----------------------------------------------------------------
+raw_df <- extract_raw_data(project)
+```
 
 
 ### Check for file changes

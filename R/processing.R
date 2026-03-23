@@ -394,6 +394,7 @@ get_sample_metadata_from_json <- function(chamber_id, dld8_json) {
       experimentCode = safe_get(info, c("experimentCode", "value"))
     ),
     protocol = safe_get(protocol, c("value")),
+    operator = safe_get(run_data, c("userInfo", "userName", "value")),
     backgroundCorrection = list(
       a0 = safe_get(background, c("a0", "value")),
       b0 = safe_get(background, c("b0", "value"))
@@ -650,6 +651,7 @@ extract_metadata_df <- function(project, include_non_experimental = FALSE) {
         rel_path = rel,
         chamber = ch,
         protocol = md$protocol %||% NA_character_,
+        operator = md$operator %||% NA_character_,
         sampleType = md$metaData$sampleType %||% NA_character_,
         cohort = md$metaData$cohort %||% NA_character_,
         sampleCode = md$metaData$sampleCode %||% NA_character_,
