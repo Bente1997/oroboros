@@ -9,7 +9,9 @@ new_dld8_project(
   rel_files,
   excluded_files,
   exclude_non_experimental,
-  parse_errors = list()
+  parse_errors = list(),
+  parsed_dld8 = new.env(parent = emptyenv()),
+  excluded_chambers = empty_excluded_chambers_df()
 )
 }
 \arguments{
@@ -19,9 +21,13 @@ new_dld8_project(
 
 \item{excluded_files}{Relative paths excluded in the project.}
 
-\item{exclude_non_experimental}{Logical; whether non-experimental protocols were filtered.}
+\item{exclude_non_experimental}{Logical; whether non-experimental chambers/files were filtered.}
 
 \item{parse_errors}{Optional list of parse errors.}
+
+\item{parsed_dld8}{Optional parsed DLD8 cache.}
+
+\item{excluded_chambers}{Optional data frame of chamber-level exclusions.}
 }
 \value{
 An object of class \code{dld8_project}.

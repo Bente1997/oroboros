@@ -103,6 +103,103 @@ marker_exists <- function(mark_name, marks) {
   FALSE
 }
 
+empty_excluded_chambers_df <- function() {
+  data.frame(
+    rel_path = character(),
+    chamber = character(),
+    reason = character(),
+    stringsAsFactors = FALSE
+  )
+}
+
+normalize_excluded_chambers_df <- function(x) {
+  empty <- empty_excluded_chambers_df()
+  if (is.null(x) || length(x) == 0) return(empty)
+  if (!is.data.frame(x)) {
+    x <- as.data.frame(x, stringsAsFactors = FALSE)
+  }
+  if (nrow(x) == 0) return(empty)
+  for (nm in names(empty)) {
+    if (!nm %in% names(x)) x[[nm]] <- empty[[nm]]
+  }
+  x <- x[, names(empty), drop = FALSE]
+  x$rel_path <- as.character(x$rel_path)
+  x$chamber <- as.character(x$chamber)
+  x$reason <- as.character(x$reason)
+  unique(x)
+}
+
+is_non_experimental_protocol <- function(protocol_name) {
+  protocol_name <- trimws(as.character(protocol_name %||% ""))
+  nzchar(protocol_name) && (
+    protocol_name %in% EXCLUDED_PROTOCOLS ||
+      grepl("calibration", protocol_name, ignore.case = TRUE)
+  )
+}
+
+classify_project_file <- function(rel, dld8_json, exclude_non_experimental = TRUE,
+                                  verbose = FALSE) {
+  empty_excluded <- empty_excluded_chambers_df()
+  if (is.null(dld8_json) || !is.list(dld8_json)) {
+    return(list(status = "parse_failure", excluded_chambers = empty_excluded))
+  }
+
+  has_metadata <- FALSE
+  has_allowed_chamber <- FALSE
+  has_allowed_marks <- FALSE
+  excluded_chambers <- empty_excluded
+
+  for (ch in c("chamber_a", "chamber_b")) {
+    md <- get_sample_metadata_from_json(ch, dld8_json)
+    if (length(md) == 0) next
+    has_metadata <- TRUE
+
+    protocol <- md$protocol %||% ""
+    if (isTRUE(exclude_non_experimental) && is_non_experimental_protocol(protocol)) {
+      excluded_chambers <- rbind(
+        excluded_chambers,
+        data.frame(
+          rel_path = rel,
+          chamber = ch,
+          reason = "protocol",
+          stringsAsFactors = FALSE
+        )
+      )
+      next
+    }
+
+    has_allowed_chamber <- TRUE
+    marks <- get_marks_from_chamber(ch, dld8_json, verbose = verbose)
+    if (length(marks) > 0) {
+      has_allowed_marks <- TRUE
+    }
+  }
+
+  excluded_chambers <- normalize_excluded_chambers_df(excluded_chambers)
+
+  if (!has_metadata) {
+    return(list(status = "excluded_by_marks", excluded_chambers = empty_excluded))
+  }
+  if (isTRUE(exclude_non_experimental) && !has_allowed_chamber) {
+    return(list(status = "excluded_by_protocol", excluded_chambers = empty_excluded))
+  }
+  if (!has_allowed_marks) {
+    return(list(status = "excluded_by_marks", excluded_chambers = excluded_chambers))
+  }
+
+  list(status = "include", excluded_chambers = excluded_chambers)
+}
+
+get_project_chambers <- function(project, rel, include_non_experimental = FALSE) {
+  chambers <- c("chamber_a", "chamber_b")
+  if (isTRUE(include_non_experimental)) return(chambers)
+
+  excluded_chambers <- normalize_excluded_chambers_df(project$excluded_chambers)
+  if (nrow(excluded_chambers) == 0) return(chambers)
+
+  setdiff(chambers, excluded_chambers$chamber[excluded_chambers$rel_path == rel])
+}
+
 #' Debug: Print Present Marks Per File/Chamber
 #'
 #' Prints the mark names found in each file and chamber.
@@ -121,7 +218,7 @@ debug_print_present_marks <- function(project, include_non_experimental = FALSE)
       message("[skip] parse failed: ", rel)
       next
     }
-    for (ch in c("chamber_a", "chamber_b")) {
+    for (ch in get_project_chambers(project, rel, include_non_experimental = include_non_experimental)) {
       marks <- get_marks_from_chamber(ch, dld8_json, verbose = FALSE)
       names_vec <- character()
       if (length(marks) > 0) {
@@ -488,12 +585,14 @@ scan_dld8_files <- function(source_folder) {
 #' @param source_folder Root folder containing `.dld8` files.
 #' @param rel_files Relative paths included in the project.
 #' @param excluded_files Relative paths excluded in the project.
-#' @param exclude_non_experimental Logical; whether non-experimental protocols were filtered.
+#' @param exclude_non_experimental Logical; whether non-experimental chambers/files were filtered.
 #' @param parse_errors Optional list of parse errors.
+#' @param excluded_chambers Optional data frame of chamber-level exclusions.
 #' @return An object of class `dld8_project`.
 #' @keywords internal
 new_dld8_project <- function(source_folder, rel_files, excluded_files, exclude_non_experimental,
-                             parse_errors = list(), parsed_dld8 = new.env(parent = emptyenv())) {
+                             parse_errors = list(), parsed_dld8 = new.env(parent = emptyenv()),
+                             excluded_chambers = empty_excluded_chambers_df()) {
   # `parsed_dld8` is a named list (or environment) containing the result of
   # `read_dld8_json()` for each file included in the project.  it is used
   # by the various `extract_*`/`validate_*` helpers so they don't re‑read
@@ -504,6 +603,7 @@ new_dld8_project <- function(source_folder, rel_files, excluded_files, exclude_n
       source_folder = source_folder,
       dld8_files = rel_files,
       excluded_dld8_files = excluded_files,
+      excluded_chambers = normalize_excluded_chambers_df(excluded_chambers),
       parse_errors = parse_errors,
       file_cache = file_cache,
       parsed_dld8 = parsed_dld8,
@@ -534,7 +634,7 @@ new_dld8_project <- function(source_folder, rel_files, excluded_files, exclude_n
 #' Scans a folder, parses files, and returns a `dld8_project` object.
 #'
 #' @param source_folder Folder containing `.dld8` files.
-#' @param exclude_non_experimental Logical; filter out non-experimental protocols.
+#' @param exclude_non_experimental Logical; filter out non-experimental chambers/files.
 #' @param verbose Logical; if `TRUE` show parsing diagnostics from `get_marks_from_chamber`.
 #' @return A `dld8_project` object.
 #' @export
@@ -546,7 +646,6 @@ create_dld8_project <- function(source_folder, exclude_non_experimental = TRUE, 
     return(new_dld8_project(source_folder, character(), character(), exclude_non_experimental))
   }
 
-  full_metadata <- list()
   dld8_cache <- list()
   parse_failures <- character()
   parse_errors <- list()
@@ -563,67 +662,40 @@ create_dld8_project <- function(source_folder, exclude_non_experimental = TRUE, 
     }
   }
 
-  for (rel in names(dld8_cache)) {
-    dld8_json <- dld8_cache[[rel]]
-    full_metadata[[rel]] <- list(
-      chamber_a = get_sample_metadata_from_json("chamber_a", dld8_json),
-      chamber_b = get_sample_metadata_from_json("chamber_b", dld8_json)
-    )
-  }
-
   # convert parsed list to environment for mutable caching
   parsed_env <- new.env(parent = emptyenv())
   for (rel in names(dld8_cache)) parsed_env[[rel]] <- dld8_cache[[rel]]
 
-  filtered_files <- character()
+  included <- character()
   excluded_by_protocol <- character()
-  if (exclude_non_experimental) {
-    for (rel in names(full_metadata)) {
-      chambers <- full_metadata[[rel]]
-      protocols <- c(
-        chambers$chamber_a$protocol %||% "",
-        chambers$chamber_b$protocol %||% ""
-      )
-      # exclude anything explicitly listed or any protocol name that
-      # contains "calibration" (case insensitive).  this mirrors the
-      # behavior of the original app and ensures we don't accidentally
-      # treat calibration runs as experimental.
-      bad_proto <- protocols %in% EXCLUDED_PROTOCOLS |
-                   grepl("calibration", protocols, ignore.case = TRUE)
-      if (all(!bad_proto)) {
-        filtered_files <- c(filtered_files, rel)
-      } else {
-        excluded_by_protocol <- c(excluded_by_protocol, rel)
-      }
-    }
-  } else {
-    filtered_files <- names(full_metadata)
-  }
-
-  stats <- list()
   excluded_by_marks <- character()
-  for (rel in filtered_files) {
-    dld8_json <- dld8_cache[[rel]]
-    if (is.null(dld8_json)) {
-      excluded_by_marks <- c(excluded_by_marks, rel)
-      next
-    }
-    run_data <- get_latest_run_data(dld8_json)
-    chamber_a <- if (!is.null(run_data$chamber1)) get_marks_from_chamber("chamber_a", dld8_json, verbose = verbose) else list()
-    chamber_b <- if (!is.null(run_data$chamber2)) get_marks_from_chamber("chamber_b", dld8_json, verbose = verbose) else list()
-    if (length(chamber_a) > 0 || length(chamber_b) > 0) {
-      stats[[rel]] <- list(chamber_a = chamber_a, chamber_b = chamber_b)
-    } else {
+  excluded_chambers <- empty_excluded_chambers_df()
+  for (rel in names(dld8_cache)) {
+    classification <- classify_project_file(
+      rel,
+      dld8_cache[[rel]],
+      exclude_non_experimental = exclude_non_experimental,
+      verbose = verbose
+    )
+
+    if (identical(classification$status, "include")) {
+      included <- c(included, rel)
+      if (nrow(classification$excluded_chambers) > 0) {
+        excluded_chambers <- rbind(excluded_chambers, classification$excluded_chambers)
+      }
+    } else if (identical(classification$status, "excluded_by_protocol")) {
+      excluded_by_protocol <- c(excluded_by_protocol, rel)
+    } else if (identical(classification$status, "excluded_by_marks")) {
       excluded_by_marks <- c(excluded_by_marks, rel)
     }
   }
 
-  included <- if (length(stats) == 0) character() else names(stats)
   excluded <- c(excluded_by_protocol, excluded_by_marks, parse_failures)
 
   new_dld8_project(source_folder, included, excluded, exclude_non_experimental,
                    parse_errors = parse_errors,
-                   parsed_dld8 = parsed_env)
+                   parsed_dld8 = parsed_env,
+                   excluded_chambers = excluded_chambers)
 }
 
 #' Extract Metadata Data Frame
@@ -644,7 +716,7 @@ extract_metadata_df <- function(project, include_non_experimental = FALSE) {
   for (rel in rel_files) {
     dld8_json <- get_dld8(project, rel)
     if (is.null(dld8_json)) next
-    for (ch in c("chamber_a", "chamber_b")) {
+    for (ch in get_project_chambers(project, rel, include_non_experimental = include_non_experimental)) {
       md <- get_sample_metadata_from_json(ch, dld8_json)
       if (length(md) == 0) next
       row <- data.frame(
@@ -689,7 +761,7 @@ extract_marks_df <- function(project, include_non_experimental = FALSE) {
   for (rel in rel_files) {
     dld8_json <- get_dld8(project, rel)
     if (is.null(dld8_json)) next
-    for (ch in c("chamber_a", "chamber_b")) {
+    for (ch in get_project_chambers(project, rel, include_non_experimental = include_non_experimental)) {
       marks <- get_marks_from_chamber(ch, dld8_json, verbose = FALSE)
       if (length(marks) == 0) next
       for (mk in marks) {
@@ -790,43 +862,7 @@ check_project_changes <- function(project, include_non_experimental = TRUE,
     env <- project$parsed_dld8
 
     exclude_non_experimental <- project$settings$exclude_non_experimental %||% TRUE
-
-    classify_file <- function(rel, dld8_json) {
-      if (is.null(dld8_json) || !is.list(dld8_json)) {
-        return("parse_failure")
-      }
-      chambers <- list(
-        chamber_a = get_sample_metadata_from_json("chamber_a", dld8_json),
-        chamber_b = get_sample_metadata_from_json("chamber_b", dld8_json)
-      )
-      if (length(chambers$chamber_a) == 0 && length(chambers$chamber_b) == 0) {
-        return("excluded_by_marks")
-      }
-      include_file <- TRUE
-      if (isTRUE(exclude_non_experimental)) {
-        protocols <- c(chambers$chamber_a$protocol %||% "", chambers$chamber_b$protocol %||% "")
-        bad_proto <- protocols %in% EXCLUDED_PROTOCOLS | grepl("calibration", protocols, ignore.case = TRUE)
-        if (all(bad_proto)) {
-          include_file <- FALSE
-        }
-      }
-      if (!include_file) {
-        return("excluded_by_protocol")
-      }
-
-      has_marks <- FALSE
-      for (ch in c("chamber_a", "chamber_b")) {
-        marks <- get_marks_from_chamber(ch, dld8_json, verbose = FALSE)
-        if (length(marks) > 0) {
-          has_marks <- TRUE
-          break
-        }
-      }
-      if (!has_marks) {
-        return("excluded_by_marks")
-      }
-      "include"
-    }
+    project$excluded_chambers <- normalize_excluded_chambers_df(project$excluded_chambers)
 
     # Remove deleted files from project and cache.
     for (rel in removed) {
@@ -835,6 +871,9 @@ check_project_changes <- function(project, include_non_experimental = TRUE,
       }
       project$dld8_files <- setdiff(project$dld8_files, rel)
       project$excluded_dld8_files <- setdiff(project$excluded_dld8_files, rel)
+      project$excluded_chambers <- project$excluded_chambers[
+        project$excluded_chambers$rel_path != rel, , drop = FALSE
+      ]
     }
 
     # Update changed and added files.
@@ -843,15 +882,29 @@ check_project_changes <- function(project, include_non_experimental = TRUE,
       dld8_json <- tryCatch(read_dld8_json(abs_path), error = function(e) NULL)
       env[[rel]] <- dld8_json
 
-      status <- classify_file(rel, dld8_json)
-      if (status == "include") {
+      classification <- classify_project_file(
+        rel,
+        dld8_json,
+        exclude_non_experimental = exclude_non_experimental,
+        verbose = FALSE
+      )
+      project$excluded_chambers <- project$excluded_chambers[
+        project$excluded_chambers$rel_path != rel, , drop = FALSE
+      ]
+
+      if (identical(classification$status, "include")) {
         project$dld8_files <- unique(c(setdiff(project$dld8_files, rel), rel))
         project$excluded_dld8_files <- setdiff(project$excluded_dld8_files, rel)
+        if (nrow(classification$excluded_chambers) > 0) {
+          project$excluded_chambers <- rbind(project$excluded_chambers, classification$excluded_chambers)
+        }
       } else {
         project$excluded_dld8_files <- unique(c(setdiff(project$excluded_dld8_files, rel), rel))
         project$dld8_files <- setdiff(project$dld8_files, rel)
       }
     }
+
+    project$excluded_chambers <- normalize_excluded_chambers_df(project$excluded_chambers)
 
     out$project <- project
   }
@@ -953,7 +1006,7 @@ validate_effective_markers <- function(project, include_non_experimental = FALSE
   for (rel in rel_files) {
     dld8_json <- get_file(rel)
     if (is.null(dld8_json)) next
-    for (ch in c("chamber_a", "chamber_b")) {
+    for (ch in get_project_chambers(project, rel, include_non_experimental = include_non_experimental)) {
       md <- get_sample_metadata_from_json(ch, dld8_json)
       if (length(md) == 0) next
       marks <- get_marks_from_chamber(ch, dld8_json, verbose = FALSE)
@@ -1265,7 +1318,7 @@ extract_flux_tables <- function(project, include_non_experimental = FALSE,
       next
     }
 
-    for (ch in c("chamber_a", "chamber_b")) {
+    for (ch in get_project_chambers(project, rel, include_non_experimental = include_non_experimental)) {
       md <- get_sample_metadata_from_json(ch, dld8_json)
       if (length(md) == 0) {
         if (isTRUE(verbose)) message("[skip] no metadata: ", rel, " ", ch)

@@ -4,12 +4,18 @@
 \alias{create_dld8_project}
 \title{Create a DLD8 Project (In Memory)}
 \usage{
-create_dld8_project(source_folder, exclude_non_experimental = TRUE)
+create_dld8_project(
+  source_folder,
+  exclude_non_experimental = TRUE,
+  verbose = FALSE
+)
 }
 \arguments{
 \item{source_folder}{Folder containing \code{.dld8} files.}
 
-\item{exclude_non_experimental}{Logical; filter out non-experimental protocols.}
+\item{exclude_non_experimental}{Logical; filter out non-experimental chambers/files.}
+
+\item{verbose}{Logical; if \code{TRUE} show parsing diagnostics from \code{get_marks_from_chamber}.}
 }
 \value{
 A \code{dld8_project} object.

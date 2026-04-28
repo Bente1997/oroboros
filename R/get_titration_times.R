@@ -192,7 +192,7 @@ extract_events_and_raw_data <- function(project,
     dld8_json <- get_dld8(project, rel)
     if (is.null(dld8_json)) next
 
-    for (chamber in c("chamber_a", "chamber_b")) {
+    for (chamber in get_project_chambers(project, rel, include_non_experimental = include_non_experimental)) {
       chamber_data <- get_titration_times_from_chamber(chamber, dld8_json,
                                                        only_protocol_events = only_protocol_events,
                                                        remove_bg_cal_protocols = remove_bg_cal_protocols)

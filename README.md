@@ -25,11 +25,12 @@ source_folder <- "C:/data/dld8_runs"
 
 project <- create_dld8_project(
   source_folder = source_folder,
-  exclude_non_experimental = TRUE  # default: TRUE. Excludes cleaning/background protocols.
+  exclude_non_experimental = TRUE  # default: TRUE. Excludes non-experimental chambers/files.
 )
 
 print(project$dld8_files) # Nr. of experimental dld8 files found in your directory
-print(project$excluded_dld8_files) # Nr. of dld8 files excluded (cleaning/background files)
+print(project$excluded_dld8_files) # Nr. of dld8 files excluded entirely
+print(project$excluded_chambers)   # Chamber-level exclusions within otherwise included files
 
 ```
 
